@@ -6,35 +6,34 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-ml_model = {} 
+ml_model = {}
 
 
-
-
+def load_model_state():
+    if 'model' not in ml_model or 'threshold' not in ml_model:
+        ml_model['model'] = joblib.load('credit_risk_model.pkl')
+        ml_model['threshold'] = joblib.load('best_threshold.pkl')
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ml_model['model'] = joblib.load('credit_risk_model.pkl')
-    ml_model['threshold'] = joblib.load('best_threshold.pkl')
-
+    load_model_state()
     yield
-
     ml_model.clear()
+
 
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 
-
-class LoanApplication(BaseModel): #Pydantic Model 
+class LoanApplication(BaseModel):
     person_age: int
     person_income: float
     person_home_ownership: str
@@ -48,20 +47,25 @@ class LoanApplication(BaseModel): #Pydantic Model
     cb_person_cred_hist_length: int
 
 
-
 @app.post('/predict')
-def predict(data : LoanApplication):
-    input_df = pd.DataFrame([data.dict()])
+def predict(data: LoanApplication):
+    load_model_state()
+    input_df = pd.DataFrame([data.model_dump()])
 
     probability = ml_model['model'].predict_proba(input_df)[:, 1][0]
-
-    prediction = int(probability >= ml_model["best_threshold"])
+    prediction = int(probability >= ml_model['threshold'])
 
     return {
-        "default_probability": probability,
-        "default_prediction": prediction,
-        "threshold": ml_model["best_threshold"],
-        "Result": "High Risk" if prediction == 1 else "Low Risk"
+        'default_probability': float(probability),
+        'default_prediction': prediction,
+        'threshold': float(ml_model['threshold']),
+        'Result': 'High Risk' if prediction == 1 else 'Low Risk',
     }
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+app.mount('/', StaticFiles(directory='static', html=True), name='static')
+
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run('main:app', host='0.0.0.0', port=8000, reload=False)
